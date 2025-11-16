@@ -42,6 +42,14 @@ public class RouteFollower : MonoBehaviour
     public float moveDuration = 1.2f;
     public float settleDelay = 0.15f;
 
+    [Header("IK Hints")]
+    [Range(0f, 1f)] public float handHintWeight = 0.85f;
+    [Range(0f, 1f)] public float footHintWeight = 0.7f;
+    public float elbowLateralOffset = 0.25f;
+    public float elbowForwardOffset = 0.1f;
+    public float kneeLateralOffset = 0.18f;
+    public float kneeForwardOffset = 0.05f;
+
     [Header("Body Follow")]
     public Transform bodyRoot;
     public CharacterController bodyController;
@@ -51,6 +59,13 @@ public class RouteFollower : MonoBehaviour
     public float bodyRotateSpeed = 7f;
     public bool alignBodyToWall = true;
     public bool disablePlayerController = true;
+
+    [Header("Debug")]
+    public bool logMoves;
+
+    [Header("Hold Placement")]
+    public float handDepth = 0.22f;
+    public float footDepth = 0.12f;
 
     static readonly AvatarIKGoal[] trackedGoals =
     {
@@ -68,21 +83,30 @@ public class RouteFollower : MonoBehaviour
         { AvatarIKGoal.RightFoot, HumanBodyBones.RightFoot }
     };
 
-    readonly Dictionary<string, AvatarIKGoal> limbMap = new()
+    readonly Dictionary<AvatarIKGoal, Vector3> ikTargets = new();
+    readonly Dictionary<AvatarIKHint, Vector3> ikHintTargets = new();
+    readonly Dictionary<AvatarIKGoal, AvatarIKHint> hintMap = new()
     {
-        { "LF", AvatarIKGoal.LeftFoot },
-        { "RF", AvatarIKGoal.RightFoot },
-        { "LH", AvatarIKGoal.LeftHand },
-        { "RH", AvatarIKGoal.RightHand }
+        { AvatarIKGoal.LeftHand, AvatarIKHint.LeftElbow },
+        { AvatarIKGoal.RightHand, AvatarIKHint.RightElbow },
+        { AvatarIKGoal.LeftFoot, AvatarIKHint.LeftKnee },
+        { AvatarIKGoal.RightFoot, AvatarIKHint.RightKnee }
     };
 
-    readonly Dictionary<AvatarIKGoal, Vector3> ikTargets = new();
+    readonly Dictionary<AvatarIKGoal, HumanBodyBones> limbRootBones = new()
+    {
+        { AvatarIKGoal.LeftHand, HumanBodyBones.LeftUpperArm },
+        { AvatarIKGoal.RightHand, HumanBodyBones.RightUpperArm },
+        { AvatarIKGoal.LeftFoot, HumanBodyBones.LeftUpperLeg },
+        { AvatarIKGoal.RightFoot, HumanBodyBones.RightUpperLeg }
+    };
     RouteFile route;
     Coroutine playback;
     bool ikDirty;
     bool controllerSuppressed;
     bool previousStationary;
     bool previousControllerEnabled;
+    bool ikActive;
 
     void Awake()
     {
@@ -132,6 +156,7 @@ public class RouteFollower : MonoBehaviour
         CacheInitialTargets();
         UpdateBodyPose(true);
         DisableManualController();
+        ikActive = true;
 
         if (playback != null)
         {
@@ -147,6 +172,8 @@ public class RouteFollower : MonoBehaviour
             StopCoroutine(playback);
             playback = null;
         }
+        ikActive = false;
+        ikTargets.Clear();
         RestoreManualController();
     }
 
@@ -154,15 +181,20 @@ public class RouteFollower : MonoBehaviour
     {
         foreach (var move in route.moves)
         {
-            if (!limbMap.TryGetValue(move.limb, out var goal))
+            if (!TryResolveGoal(move.limb, out var goal))
             {
+                Debug.LogWarning($"RouteFollower: Unknown limb '{move.limb}' at step {move.step}.");
                 continue;
             }
 
             Vector3 start = ikTargets.TryGetValue(goal, out var current)
                 ? current
                 : SampleGoalPosition(goal);
-            Vector3 target = WallToWorld(move.nx, move.ny);
+            Vector3 target = ApplyGoalOffsets(goal, WallToWorld(move.nx, move.ny));
+            if (logMoves)
+            {
+                Debug.Log($"RouteFollower: Step {move.step} - {move.limb} -> {goal} target {target}");
+            }
             float elapsed = 0f;
 
             while (elapsed < moveDuration)
@@ -185,6 +217,48 @@ public class RouteFollower : MonoBehaviour
         }
         playback = null;
         RestoreManualController();
+        ikActive = false;
+        ikTargets.Clear();
+    }
+
+    bool TryResolveGoal(string limbCode, out AvatarIKGoal goal)
+    {
+        goal = AvatarIKGoal.LeftHand;
+        if (string.IsNullOrWhiteSpace(limbCode))
+        {
+            return false;
+        }
+
+        string normalized = limbCode.Trim().ToUpperInvariant();
+        switch (normalized)
+        {
+            case "LF":
+            case "LEFTFOOT":
+            case "LEFT_FOOT":
+            case "LFOOT":
+                goal = AvatarIKGoal.LeftFoot;
+                return true;
+            case "RF":
+            case "RIGHTFOOT":
+            case "RIGHT_FOOT":
+            case "RFOOT":
+                goal = AvatarIKGoal.RightFoot;
+                return true;
+            case "LH":
+            case "LEFTHAND":
+            case "LEFT_HAND":
+            case "LHAND":
+                goal = AvatarIKGoal.LeftHand;
+                return true;
+            case "RH":
+            case "RIGHTHAND":
+            case "RIGHT_HAND":
+            case "RHAND":
+                goal = AvatarIKGoal.RightHand;
+                return true;
+            default:
+                return false;
+        }
     }
 
     Vector3 WallToWorld(float nx, float ny)
@@ -194,6 +268,22 @@ public class RouteFollower : MonoBehaviour
         Vector3 right = wallOrigin.right * x;
         Vector3 up = wallOrigin.up * y;
         return wallOrigin.position + right + up;
+    }
+
+    Vector3 ApplyGoalOffsets(AvatarIKGoal goal, Vector3 basePoint)
+    {
+        if (wallOrigin == null)
+        {
+            return basePoint;
+        }
+
+        Vector3 forward = wallOrigin.forward.sqrMagnitude > 0.0001f
+            ? wallOrigin.forward.normalized
+            : Vector3.forward;
+        float depth = (goal == AvatarIKGoal.LeftHand || goal == AvatarIKGoal.RightHand)
+            ? handDepth
+            : footDepth;
+        return basePoint + (forward * depth);
     }
 
     void CacheInitialTargets()
@@ -335,24 +425,98 @@ public class RouteFollower : MonoBehaviour
 
     void OnAnimatorIK(int layerIndex)
     {
-        if (!ikDirty || animator == null)
+        if (animator == null || !ikActive)
         {
             return;
+        }
+
+        if (ikTargets.Count == 0)
+        {
+            CacheInitialTargets();
         }
 
         Quaternion ikRotation = wallOrigin != null
             ? Quaternion.LookRotation(wallOrigin.forward, wallOrigin.up)
             : animator.transform.rotation;
 
-        foreach (var kv in ikTargets)
+        foreach (var goal in trackedGoals)
         {
-            animator.SetIKPositionWeight(kv.Key, 1f);
-            animator.SetIKRotationWeight(kv.Key, 1f);
-            animator.SetIKPosition(kv.Key, kv.Value);
-            animator.SetIKRotation(kv.Key, ikRotation);
+            if (ikTargets.TryGetValue(goal, out var pos))
+            {
+                animator.SetIKPositionWeight(goal, 1f);
+                animator.SetIKRotationWeight(goal, 1f);
+                animator.SetIKPosition(goal, pos);
+                animator.SetIKRotation(goal, ikRotation);
+            }
+            else
+            {
+                animator.SetIKPositionWeight(goal, 0f);
+                animator.SetIKRotationWeight(goal, 0f);
+            }
         }
 
+        UpdateIkHints();
+        ApplyIkHints();
+
         ikDirty = false;
+    }
+
+    void UpdateIkHints()
+    {
+        if (wallOrigin == null || !animator.isHuman)
+        {
+            ikHintTargets.Clear();
+            return;
+        }
+
+        Vector3 wallRight = wallOrigin.right.sqrMagnitude > 0.0001f ? wallOrigin.right.normalized : Vector3.right;
+        Vector3 wallForward = wallOrigin.forward.sqrMagnitude > 0.0001f ? wallOrigin.forward.normalized : Vector3.forward;
+
+        ikHintTargets.Clear();
+
+        foreach (var goal in trackedGoals)
+        {
+            if (!ikTargets.TryGetValue(goal, out var effectorPos) || !hintMap.TryGetValue(goal, out var hint) ||
+                !limbRootBones.TryGetValue(goal, out var rootBone))
+            {
+                continue;
+            }
+
+            Vector3 root = SampleBonePosition(rootBone);
+            bool isHand = goal == AvatarIKGoal.LeftHand || goal == AvatarIKGoal.RightHand;
+            bool isLeft = goal == AvatarIKGoal.LeftHand || goal == AvatarIKGoal.LeftFoot;
+            float lateralOffset = isHand ? elbowLateralOffset : kneeLateralOffset;
+            float forwardOffset = isHand ? elbowForwardOffset : kneeForwardOffset;
+
+            Vector3 lateralDir = wallRight * (isLeft ? -1f : 1f);
+            Vector3 midPoint = Vector3.Lerp(root, effectorPos, isHand ? 0.65f : 0.55f);
+            Vector3 hintPos = midPoint + (lateralDir * lateralOffset) + (wallForward * forwardOffset);
+            ikHintTargets[hint] = hintPos;
+        }
+    }
+
+    void ApplyIkHints()
+    {
+        foreach (var kv in ikHintTargets)
+        {
+            bool isElbow = kv.Key == AvatarIKHint.LeftElbow || kv.Key == AvatarIKHint.RightElbow;
+            float weight = isElbow ? handHintWeight : footHintWeight;
+            animator.SetIKHintPositionWeight(kv.Key, weight);
+            animator.SetIKHintPosition(kv.Key, kv.Value);
+        }
+    }
+
+    Vector3 SampleBonePosition(HumanBodyBones bone)
+    {
+        if (animator != null && animator.isHuman)
+        {
+            Transform boneTransform = animator.GetBoneTransform(bone);
+            if (boneTransform != null)
+            {
+                return boneTransform.position;
+            }
+        }
+        return bodyRoot != null ? bodyRoot.position : transform.position;
     }
 
     void OnDisable()
