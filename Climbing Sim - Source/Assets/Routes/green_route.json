@@ -1,0 +1,77 @@
+{
+  "image_width": 3024,
+  "image_height": 4032,
+  "holds": [
+    {
+      "id": 1,
+      "center": { "x": 1703, "y": 3124 },
+      "type": "hand",
+      "hand": "LH",
+      "is_start": true
+    },
+    {
+      "id": 2,
+      "center": { "x": 2292, "y": 3204 },
+      "type": "hand",
+      "hand": "RH",
+      "is_start": true
+    },
+    {
+      "id": 3,
+      "center": { "x": 1932, "y": 3471 },
+      "type": "foot",
+      "foot": "LF",
+      "is_start": true
+    },
+    {
+      "id": 4,
+      "center": { "x": 2615, "y": 3426 },
+      "type": "foot",
+      "foot": "RF",
+      "is_start": true
+    },
+    {
+      "id": 5,
+      "center": { "x": 1336, "y": 3044 },
+      "type": "hand",
+      "hand": "RH"
+    },
+    {
+      "id": 6,
+      "center": { "x": 1928, "y": 3002 },
+      "type": "hand",
+      "hand": "LH"
+    },
+    {
+      "id": 7,
+      "center": { "x": 2342, "y": 2693 },
+      "type": "hand",
+      "hand": "RH"
+    },
+    {
+      "id": 8,
+      "center": { "x": 2930, "y": 2567 },
+      "type": "hand",
+      "hand": "LH"
+    },
+    {
+      "id": 9,
+      "center": { "x": 1479, "y": 801 },
+      "type": "hand",
+      "hand": "RH"
+    },
+    {
+      "id": 10,
+      "center": { "x": 2743, "y": 333 },
+      "type": "hand",
+      "hand": "LH"
+    },
+    {
+      "id": 11,
+      "center": { "x": 1645, "y": 83 },
+      "type": "hand",
+      "hand": "RH",
+      "is_finish": true
+    }
+  ]
+}

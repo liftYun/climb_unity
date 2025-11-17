@@ -24,6 +24,33 @@ public class RouteFile
     public RouteMove[] moves;
 }
 
+[Serializable]
+public class HoldRouteFile
+{
+    public int image_width;
+    public int image_height;
+    public HoldEntry[] holds;
+}
+
+[Serializable]
+public class HoldEntry
+{
+    public int id;
+    public HoldCenter center;
+    public string type;
+    public string hand;
+    public string foot;
+    public bool is_start;
+    public bool is_finish;
+}
+
+[Serializable]
+public class HoldCenter
+{
+    public float x;
+    public float y;
+}
+
 /// <summary>
 /// Reads a climbing route JSON file and repositions humanoid limbs (via Animator IK) to match each hold.
 /// </summary>
@@ -107,6 +134,7 @@ public class RouteFollower : MonoBehaviour
     bool previousStationary;
     bool previousControllerEnabled;
     bool ikActive;
+    readonly Dictionary<AvatarIKGoal, Vector2> startHoldTargets = new();
 
     void Awake()
     {
@@ -144,7 +172,8 @@ public class RouteFollower : MonoBehaviour
             return;
         }
 
-        route = JsonUtility.FromJson<RouteFile>(routeJson.text);
+        startHoldTargets.Clear();
+        route = LoadRouteData(routeJson.text);
         if (route?.moves == null || route.moves.Length == 0)
         {
             Debug.LogWarning("RouteFollower: Route JSON has no moves.");
@@ -173,7 +202,7 @@ public class RouteFollower : MonoBehaviour
             playback = null;
         }
         ikActive = false;
-        ikTargets.Clear();
+        startHoldTargets.Clear();
         RestoreManualController();
     }
 
@@ -265,21 +294,15 @@ public class RouteFollower : MonoBehaviour
     {
         float x = (nx - 0.5f) * wallSize.x;
         float y = ny * wallSize.y;
-        Vector3 right = wallOrigin.right * x;
-        Vector3 up = wallOrigin.up * y;
-        return wallOrigin.position + right + up;
+        Vector3 originPos = wallOrigin != null ? wallOrigin.position : transform.position;
+        Vector3 right = PlayerRight() * x;
+        Vector3 up = PlayerUp() * y;
+        return originPos + right + up;
     }
 
     Vector3 ApplyGoalOffsets(AvatarIKGoal goal, Vector3 basePoint)
     {
-        if (wallOrigin == null)
-        {
-            return basePoint;
-        }
-
-        Vector3 forward = wallOrigin.forward.sqrMagnitude > 0.0001f
-            ? wallOrigin.forward.normalized
-            : Vector3.forward;
+        Vector3 forward = PlayerForward();
         float depth = (goal == AvatarIKGoal.LeftHand || goal == AvatarIKGoal.RightHand)
             ? handDepth
             : footDepth;
@@ -291,8 +314,123 @@ public class RouteFollower : MonoBehaviour
         ikTargets.Clear();
         foreach (var goal in trackedGoals)
         {
-            ikTargets[goal] = SampleGoalPosition(goal);
+            Vector3 initial = SampleGoalPosition(goal);
+            if (startHoldTargets.TryGetValue(goal, out var uv))
+            {
+                initial = ApplyGoalOffsets(goal, WallToWorld(uv.x, uv.y));
+            }
+            ikTargets[goal] = initial;
         }
+    }
+
+    RouteFile LoadRouteData(string json)
+    {
+        if (TryParseHoldRoute(json, out var holdRoute))
+        {
+            return ConvertHoldRoute(holdRoute);
+        }
+        return JsonUtility.FromJson<RouteFile>(json);
+    }
+
+    bool TryParseHoldRoute(string json, out HoldRouteFile holdRoute)
+    {
+        holdRoute = JsonUtility.FromJson<HoldRouteFile>(json);
+        if (holdRoute == null || holdRoute.holds == null || holdRoute.holds.Length == 0)
+        {
+            holdRoute = null;
+            return false;
+        }
+        return holdRoute.image_width > 0 && holdRoute.image_height > 0;
+    }
+
+    RouteFile ConvertHoldRoute(HoldRouteFile holdRoute)
+    {
+        List<RouteMove> moves = new();
+        if (holdRoute?.holds == null)
+        {
+            return new RouteFile { moves = Array.Empty<RouteMove>() };
+        }
+
+        foreach (var hold in holdRoute.holds)
+        {
+            if (!TryResolveGoalFromHold(hold, out var limbCode, out var goal))
+            {
+                continue;
+            }
+
+            Vector2 normalized = NormalizeHoldPosition(holdRoute, hold.center);
+            if (hold.is_start)
+            {
+                startHoldTargets[goal] = normalized;
+                continue;
+            }
+
+            moves.Add(new RouteMove
+            {
+                step = moves.Count + 1,
+                limb = limbCode,
+                hold_idx = hold.id,
+                hold_id = hold.id.ToString(),
+                nx = normalized.x,
+                ny = normalized.y
+            });
+        }
+
+        return new RouteFile
+        {
+            algorithm = "generated_from_holds",
+            total_holds = holdRoute.holds.Length,
+            total_moves = moves.Count,
+            final_height = moves.Count > 0 ? moves[moves.Count - 1].ny : 0f,
+            moves = moves.ToArray()
+        };
+    }
+
+    bool TryResolveGoalFromHold(HoldEntry hold, out string limbCode, out AvatarIKGoal goal)
+    {
+        limbCode = null;
+        goal = AvatarIKGoal.LeftHand;
+        if (hold == null)
+        {
+            return false;
+        }
+
+        string candidate = string.Empty;
+        if (!string.IsNullOrEmpty(hold.type))
+        {
+            if (string.Equals(hold.type, "hand", StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = hold.hand;
+            }
+            else if (string.Equals(hold.type, "foot", StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = hold.foot;
+            }
+        }
+
+        if (string.IsNullOrEmpty(candidate))
+        {
+            candidate = !string.IsNullOrEmpty(hold.hand) ? hold.hand : hold.foot;
+        }
+
+        if (string.IsNullOrEmpty(candidate))
+        {
+            return false;
+        }
+
+        limbCode = candidate;
+        return TryResolveGoal(candidate, out goal);
+    }
+
+    Vector2 NormalizeHoldPosition(HoldRouteFile holdRoute, HoldCenter center)
+    {
+        float width = holdRoute != null && holdRoute.image_width > 0 ? holdRoute.image_width : 1f;
+        float height = holdRoute != null && holdRoute.image_height > 0 ? holdRoute.image_height : 1f;
+        float cx = center != null ? center.x : width * 0.5f;
+        float cy = center != null ? center.y : height * 0.5f;
+        float nx = Mathf.Clamp01(cx / width);
+        float ny = Mathf.Clamp01(1f - (cy / height));
+        return new Vector2(nx, ny);
     }
 
     void UpdateBodyPose(bool instant = false)
@@ -344,21 +482,18 @@ public class RouteFollower : MonoBehaviour
 
     Vector3 WallSpaceOffset(Vector3 offset)
     {
-        if (wallOrigin == null)
-        {
-            return offset;
-        }
-        return (wallOrigin.right * offset.x) + (wallOrigin.up * offset.y) + (wallOrigin.forward * offset.z);
+        Vector3 up = PlayerUp();
+        return (PlayerRight() * offset.x) + (up * offset.y) + (PlayerForward() * offset.z);
     }
 
     void AlignBodyRotation(bool instant)
     {
-        if (bodyRoot == null || wallOrigin == null)
+        if (bodyRoot == null)
         {
             return;
         }
 
-        Vector3 forward = wallOrigin.forward;
+        Vector3 forward = PlayerForward();
         forward.y = 0f;
 
         if (forward.sqrMagnitude < 0.0001f)
@@ -366,7 +501,7 @@ public class RouteFollower : MonoBehaviour
             return;
         }
 
-        Quaternion target = Quaternion.LookRotation(forward.normalized, Vector3.up);
+        Quaternion target = Quaternion.LookRotation(forward.normalized, PlayerUp());
         float lerp = instant ? 1f : Mathf.Clamp01(Time.deltaTime * bodyRotateSpeed);
         bodyRoot.rotation = Quaternion.Slerp(bodyRoot.rotation, target, lerp);
     }
@@ -435,9 +570,7 @@ public class RouteFollower : MonoBehaviour
             CacheInitialTargets();
         }
 
-        Quaternion ikRotation = wallOrigin != null
-            ? Quaternion.LookRotation(wallOrigin.forward, wallOrigin.up)
-            : animator.transform.rotation;
+        Quaternion ikRotation = Quaternion.LookRotation(PlayerForward(), PlayerUp());
 
         foreach (var goal in trackedGoals)
         {
@@ -469,8 +602,8 @@ public class RouteFollower : MonoBehaviour
             return;
         }
 
-        Vector3 wallRight = wallOrigin.right.sqrMagnitude > 0.0001f ? wallOrigin.right.normalized : Vector3.right;
-        Vector3 wallForward = wallOrigin.forward.sqrMagnitude > 0.0001f ? wallOrigin.forward.normalized : Vector3.forward;
+        Vector3 wallRight = PlayerRight();
+        Vector3 wallForward = PlayerForward();
 
         ikHintTargets.Clear();
 
@@ -517,6 +650,37 @@ public class RouteFollower : MonoBehaviour
             }
         }
         return bodyRoot != null ? bodyRoot.position : transform.position;
+    }
+
+    Vector3 PlayerForward()
+    {
+        Vector3 forward = wallOrigin != null ? -wallOrigin.forward : Vector3.forward;
+        if (forward.sqrMagnitude < 0.0001f)
+        {
+            forward = Vector3.forward;
+        }
+        return forward.normalized;
+    }
+
+    Vector3 PlayerUp()
+    {
+        Vector3 up = wallOrigin != null ? wallOrigin.up : Vector3.up;
+        if (up.sqrMagnitude < 0.0001f)
+        {
+            up = Vector3.up;
+        }
+        return up.normalized;
+    }
+
+    Vector3 PlayerRight()
+    {
+        Vector3 forward = PlayerForward();
+        Vector3 right = Vector3.Cross(PlayerUp(), forward);
+        if (right.sqrMagnitude < 0.0001f)
+        {
+            right = Vector3.Cross(Vector3.up, forward);
+        }
+        return right.normalized;
     }
 
     void OnDisable()
