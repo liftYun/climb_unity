@@ -1214,7 +1214,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c010c49131dcd48a9874810a534e88a9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RouteFollower
-  routeJson: {fileID: 4900000, guid: 36f776bcfd2a15f43b67e7719fb4bcf7, type: 3}
+  routeJson: {fileID: 4900000, guid: 8e21c774e5dcc40b1a47544f909052c5, type: 3}
   playOnStart: 1
   wallOrigin: {fileID: 484962703}
   wallSize: {x: 6, y: 6}
