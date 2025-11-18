@@ -58,6 +58,7 @@ public class RouteFollower : MonoBehaviour
 {
     [Header("Route Data")]
     public TextAsset routeJson;
+    string runtimeRouteJson;
     public bool playOnStart = true;
 
     [Header("Wall Mapping")]
@@ -127,6 +128,7 @@ public class RouteFollower : MonoBehaviour
         { AvatarIKGoal.LeftFoot, HumanBodyBones.LeftUpperLeg },
         { AvatarIKGoal.RightFoot, HumanBodyBones.RightUpperLeg }
     };
+    public event Action RouteCompleted;
     RouteFile route;
     Coroutine playback;
     bool ikDirty;
@@ -166,14 +168,15 @@ public class RouteFollower : MonoBehaviour
 
     public void PlayRoute()
     {
-        if (routeJson == null || animator == null || wallOrigin == null)
+        if ((routeJson == null && string.IsNullOrEmpty(runtimeRouteJson)) || animator == null || wallOrigin == null)
         {
             Debug.LogError("RouteFollower: Missing references (routeJson / animator / wallOrigin).");
             return;
         }
 
         startHoldTargets.Clear();
-        route = LoadRouteData(routeJson.text);
+        string jsonText = !string.IsNullOrEmpty(runtimeRouteJson) ? runtimeRouteJson : routeJson.text;
+        route = LoadRouteData(jsonText);
         if (route?.moves == null || route.moves.Length == 0)
         {
             Debug.LogWarning("RouteFollower: Route JSON has no moves.");
@@ -248,6 +251,7 @@ public class RouteFollower : MonoBehaviour
         RestoreManualController();
         ikActive = false;
         ikTargets.Clear();
+        RouteCompleted?.Invoke();
     }
 
     bool TryResolveGoal(string limbCode, out AvatarIKGoal goal)
@@ -686,5 +690,10 @@ public class RouteFollower : MonoBehaviour
     void OnDisable()
     {
         StopRoute();
+    }
+
+    public void LoadRouteFromJson(string json)
+    {
+        runtimeRouteJson = json;
     }
 }
