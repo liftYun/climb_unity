@@ -47,7 +47,11 @@ public class RenderJobRunner : MonoBehaviour
     {
         if (routeFollower == null)
         {
+#if UNITY_2023_1_OR_NEWER
+            routeFollower = FindFirstObjectByType<RouteFollower>();
+#else
             routeFollower = FindObjectOfType<RouteFollower>();
+#endif
         }
 
         if (wallRenderer == null)
@@ -194,8 +198,12 @@ public class RenderJobRunner : MonoBehaviour
                 frameTexture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
                 frameTexture.Apply(false);
 
-                NativeArray<byte> raw = frameTexture.GetRawTextureData();
-                byte[] frameBytes = raw.ToArray();
+                byte[] frameBytes = CopyFrameBytes(frameTexture);
+                if (frameBytes == null || frameBytes.Length == 0)
+                {
+                    Debug.LogError("RenderJobRunner: Failed to read texture data for the current frame.");
+                    break;
+                }
                 ffmpegProcess.StandardInput.BaseStream.Write(frameBytes, 0, frameBytes.Length);
                 ffmpegProcess.StandardInput.BaseStream.Flush();
 
@@ -271,6 +279,29 @@ public class RenderJobRunner : MonoBehaviour
         {
             callback?.Invoke(true, "upload complete");
         }
+    }
+
+    static byte[] CopyFrameBytes(Texture2D texture)
+    {
+        if (texture == null)
+        {
+            return Array.Empty<byte>();
+        }
+
+        object rawData = texture.GetRawTextureData();
+
+        if (rawData is NativeArray<byte> nativeArray)
+        {
+            return nativeArray.ToArray();
+        }
+
+        if (rawData is byte[] managedBytes)
+        {
+            return managedBytes;
+        }
+
+        Debug.LogWarning($"RenderJobRunner: Unsupported raw texture data type {rawData?.GetType().Name ?? "null"}.");
+        return Array.Empty<byte>();
     }
 
     Process StartFfmpegProcess(RenderJobPayload payload, string outputPath, int width, int height, int fps)

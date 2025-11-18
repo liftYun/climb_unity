@@ -131,7 +131,6 @@ public class RouteFollower : MonoBehaviour
     public event Action RouteCompleted;
     RouteFile route;
     Coroutine playback;
-    bool ikDirty;
     bool controllerSuppressed;
     bool previousStationary;
     bool previousControllerEnabled;
@@ -234,7 +233,6 @@ public class RouteFollower : MonoBehaviour
                 elapsed += Time.deltaTime;
                 float t = Mathf.SmoothStep(0f, 1f, elapsed / moveDuration);
                 ikTargets[goal] = Vector3.Lerp(start, target, t);
-                ikDirty = true;
                 UpdateBodyPose();
                 yield return null;
             }
@@ -595,7 +593,6 @@ public class RouteFollower : MonoBehaviour
         UpdateIkHints();
         ApplyIkHints();
 
-        ikDirty = false;
     }
 
     void UpdateIkHints()

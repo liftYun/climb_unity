@@ -31,7 +31,11 @@ public class UnityRenderServer : MonoBehaviour
     {
         if (jobRunner == null)
         {
+#if UNITY_2023_1_OR_NEWER
+            jobRunner = FindFirstObjectByType<RenderJobRunner>();
+#else
             jobRunner = FindObjectOfType<RenderJobRunner>();
+#endif
         }
     }
 
