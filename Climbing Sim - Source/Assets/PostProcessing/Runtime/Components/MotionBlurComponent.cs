@@ -347,7 +347,9 @@ namespace UnityEngine.PostProcessing
                 var settings = model.settings;
                 return model.enabled
                        && ((settings.shutterAngle > 0f && reconstructionFilter.IsSupported()) || settings.frameBlending > 0f)
+#if !UNITY_2023_1_OR_NEWER
                        && SystemInfo.graphicsDeviceType != GraphicsDeviceType.OpenGLES2 // No movecs on GLES2 platforms
+#endif
                        && !context.interrupted;
             }
         }

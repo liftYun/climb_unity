@@ -10,9 +10,11 @@ public class CameraController : MonoBehaviour
     public Transform wallTarget;
     public float rotateSpeed;
     public float heading;
-    public float pitch;
-    public float playerDistance = 8;
+    public float pitch = 0;
+    public float playerDistance = 5;
     public float targetHeightOffset = 1f;
+    [Tooltip("Additional offset applied after orbit calculation. Negative values lower the camera.")]
+    public float cameraHeightOffset = -0.75f;
     public float minStartDistance = 6f;
     public float minVerticalOffset = 0f;
     public float startVerticalOffset = 1.5f;
@@ -61,10 +63,7 @@ public class CameraController : MonoBehaviour
 
         //inputs
         heading += Input.GetAxis("Mouse X") * Time.deltaTime * 180;
-        pitch -= Input.GetAxis("Mouse Y") * Time.deltaTime * 180;
-
-        if (pitch < -20) pitch = -20;
-        else if (pitch > 70) pitch = 70;
+        pitch = 0f;
 
         Vector3 parentRot = Vector3.zero;
         Vector3 cameraRot = Vector3.zero;
@@ -90,6 +89,7 @@ public class CameraController : MonoBehaviour
         newPos.y += (float)System.Math.Sin(pitchRadians) * playerDistance + 0;
         newPos.x += newPosX;
         newPos.z += newPosZ;
+        newPos.y += cameraHeightOffset;
         gameObject.transform.position = newPos;
 
     }

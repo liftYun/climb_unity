@@ -15,7 +15,7 @@ public class UnityRenderServer : MonoBehaviour
 {
     [Header("Network")]
     [Tooltip("Listening port for the local Unity server.")]
-    public int port = 8081;
+    public int port = 8785;
 
     [Tooltip("Optional shared secret that incoming requests must include in the Authorization header as 'Bearer <token>'.")]
     public string sharedSecret = "";
@@ -31,7 +31,11 @@ public class UnityRenderServer : MonoBehaviour
     {
         if (jobRunner == null)
         {
+#if UNITY_2023_1_OR_NEWER
+            jobRunner = FindFirstObjectByType<RenderJobRunner>();
+#else
             jobRunner = FindObjectOfType<RenderJobRunner>();
+#endif
         }
     }
 
@@ -61,7 +65,9 @@ public class UnityRenderServer : MonoBehaviour
         }
 
         listener = new HttpListener();
-        listener.Prefixes.Add($"http://+:{port}/");
+        RegisterPrefix("localhost");
+        RegisterPrefix("127.0.0.1");
+        // RegisterPrefix("hongsam-caramel.store");
         try
         {
             listener.Start();
@@ -76,6 +82,30 @@ public class UnityRenderServer : MonoBehaviour
         cts = new CancellationTokenSource();
         Task.Run(() => ListenLoop(cts.Token));
         Debug.Log($"UnityRenderServer listening on port {port}");
+    }
+
+    bool RegisterPrefix(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return false;
+        }
+        string trimmed = host.Trim();
+        if (trimmed.Contains("://"))
+        {
+            trimmed = trimmed.Substring(trimmed.IndexOf("://", StringComparison.Ordinal) + 3);
+        }
+        string prefix = $"http://{trimmed}:{port}/";
+        try
+        {
+            listener.Prefixes.Add(prefix);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"UnityRenderServer could not register prefix {prefix}: {ex.Message}");
+            return false;
+        }
     }
 
     void StopServer()
@@ -113,6 +143,8 @@ public class UnityRenderServer : MonoBehaviour
     {
         try
         {
+            var remote = ctx.Request.RemoteEndPoint?.ToString() ?? "unknown";
+            Debug.Log($"UnityRenderServer received {ctx.Request.HttpMethod} {ctx.Request.Url.AbsolutePath} from {remote}");
             if (!Authorize(ctx))
             {
                 WriteResponse(ctx, HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}");
@@ -192,18 +224,23 @@ public class UnityRenderServer : MonoBehaviour
     {
         if (jobRunner == null)
         {
+            Debug.LogWarning("UnityRenderServer render request rejected: job runner reference missing.");
             WriteResponse(ctx, HttpStatusCode.ServiceUnavailable, "{\"error\":\"job-runner-missing\"}");
             return;
         }
 
         string body;
-        using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding))
+        // using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding))
+        using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
         {
             body = reader.ReadToEnd();
         }
 
+        string remote = ctx.Request.RemoteEndPoint?.ToString() ?? "unknown";
+
         if (string.IsNullOrEmpty(body))
         {
+            Debug.LogWarning($"UnityRenderServer render request rejected: empty body from {remote}.");
             WriteResponse(ctx, HttpStatusCode.BadRequest, "{\"error\":\"empty-body\"}");
             return;
         }
@@ -215,18 +252,29 @@ public class UnityRenderServer : MonoBehaviour
         }
         catch (Exception ex)
         {
+            Debug.LogWarning($"UnityRenderServer render request rejected: invalid json from {remote}. {ex.Message}. Payload: {TruncateForLog(body)}");
             WriteResponse(ctx, HttpStatusCode.BadRequest, $"{{\"error\":\"invalid-json\",\"detail\":\"{ex.Message}\"}}");
             return;
         }
 
         if (payload == null || string.IsNullOrEmpty(payload.jobId))
         {
+            Debug.LogWarning($"UnityRenderServer render request rejected: missing jobId from {remote}. Payload: {TruncateForLog(body)}");
             WriteResponse(ctx, HttpStatusCode.BadRequest, "{\"error\":\"missing-job-id\"}");
             return;
         }
+        if (payload.routeJson == null || payload.routeJson.Length == 0)
+        {
+            Debug.LogWarning($"UnityRenderServer render request rejected: missing routeJson for job {payload.jobId} from {remote}.");
+            WriteResponse(ctx, HttpStatusCode.BadRequest, "{\"error\":\"missing-route-json\"}");
+            return;
+        }
+
+        Debug.Log($"UnityRenderServer accepted render job {payload.jobId} with {payload.routeJson.Length} holds from {remote}.");
 
         mainThreadActions.Enqueue(() =>
         {
+            Debug.Log($"UnityRenderServer enqueue job {payload.jobId}");
             jobRunner.EnqueueJob(payload);
         });
 
@@ -243,14 +291,30 @@ public class UnityRenderServer : MonoBehaviour
         ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
         ctx.Response.OutputStream.Close();
     }
+
+    static string TruncateForLog(string text, int maxLength = 512)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        if (text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        return text.Substring(0, maxLength) + "...(truncated)";
+    }
 }
 
 [Serializable]
 public class RenderJobPayload
 {
     public string jobId;
-    public string routeJson;
-    public string routeJsonUrl;
+    public HoldEntry[] routeJson;
+    public int imageWidth;
+    public int imageHeight;
     public string textureUrl;
     public string uploadUrl;
     public int width = 1920;

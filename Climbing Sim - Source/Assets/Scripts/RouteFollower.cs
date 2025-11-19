@@ -59,7 +59,7 @@ public class RouteFollower : MonoBehaviour
     [Header("Route Data")]
     public TextAsset routeJson;
     string runtimeRouteJson;
-    public bool playOnStart = true;
+    public bool playOnStart = false;
 
     [Header("Wall Mapping")]
     public Transform wallOrigin;
@@ -131,7 +131,6 @@ public class RouteFollower : MonoBehaviour
     public event Action RouteCompleted;
     RouteFile route;
     Coroutine playback;
-    bool ikDirty;
     bool controllerSuppressed;
     bool previousStationary;
     bool previousControllerEnabled;
@@ -234,7 +233,6 @@ public class RouteFollower : MonoBehaviour
                 elapsed += Time.deltaTime;
                 float t = Mathf.SmoothStep(0f, 1f, elapsed / moveDuration);
                 ikTargets[goal] = Vector3.Lerp(start, target, t);
-                ikDirty = true;
                 UpdateBodyPose();
                 yield return null;
             }
@@ -505,7 +503,7 @@ public class RouteFollower : MonoBehaviour
             return;
         }
 
-        Quaternion target = Quaternion.LookRotation(forward.normalized, PlayerUp());
+        Quaternion target = SafeLookRotation(forward.normalized, PlayerUp());
         float lerp = instant ? 1f : Mathf.Clamp01(Time.deltaTime * bodyRotateSpeed);
         bodyRoot.rotation = Quaternion.Slerp(bodyRoot.rotation, target, lerp);
     }
@@ -543,11 +541,9 @@ public class RouteFollower : MonoBehaviour
             return bodyRoot != null ? bodyRoot.position : transform.position;
         }
 
-        Vector3 pos = animator.GetIKPosition(goal);
-        bool invalid = float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z) || pos == Vector3.zero;
-        if (!invalid)
+        if (ikTargets.TryGetValue(goal, out var cached))
         {
-            return pos;
+            return cached;
         }
 
         if (animator.isHuman && boneMap.TryGetValue(goal, out var bone))
@@ -574,7 +570,7 @@ public class RouteFollower : MonoBehaviour
             CacheInitialTargets();
         }
 
-        Quaternion ikRotation = Quaternion.LookRotation(PlayerForward(), PlayerUp());
+        Quaternion ikRotation = SafeLookRotation(PlayerForward(), PlayerUp());
 
         foreach (var goal in trackedGoals)
         {
@@ -595,7 +591,6 @@ public class RouteFollower : MonoBehaviour
         UpdateIkHints();
         ApplyIkHints();
 
-        ikDirty = false;
     }
 
     void UpdateIkHints()
@@ -685,6 +680,23 @@ public class RouteFollower : MonoBehaviour
             right = Vector3.Cross(Vector3.up, forward);
         }
         return right.normalized;
+    }
+
+    static Quaternion SafeLookRotation(Vector3 forward, Vector3 up)
+    {
+        if (forward.sqrMagnitude < 0.0001f)
+        {
+            forward = Vector3.forward;
+        }
+        if (up.sqrMagnitude < 0.0001f)
+        {
+            up = Vector3.up;
+        }
+        if (Vector3.Cross(forward, up).sqrMagnitude < 0.0001f)
+        {
+            up = Vector3.up;
+        }
+        return Quaternion.LookRotation(forward.normalized, up.normalized);
     }
 
     void OnDisable()

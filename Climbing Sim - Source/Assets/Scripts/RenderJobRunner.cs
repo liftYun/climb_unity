@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Networking;
 using Debug = UnityEngine.Debug;
@@ -47,7 +46,11 @@ public class RenderJobRunner : MonoBehaviour
     {
         if (routeFollower == null)
         {
+#if UNITY_2023_1_OR_NEWER
+            routeFollower = FindFirstObjectByType<RouteFollower>();
+#else
             routeFollower = FindObjectOfType<RouteFollower>();
+#endif
         }
 
         if (wallRenderer == null)
@@ -86,19 +89,12 @@ public class RenderJobRunner : MonoBehaviour
     {
         jobStatuses[payload.jobId] = RenderJobStatus.Running(payload.jobId, "downloading");
 
-        string routeJson = payload.routeJson;
+        HoldEntry[] holds = payload.routeJson;
         Texture2D wallTexture = null;
-
-        if (string.IsNullOrEmpty(routeJson) && !string.IsNullOrEmpty(payload.routeJsonUrl))
+        if (holds == null || holds.Length == 0)
         {
-            using UnityWebRequest req = UnityWebRequest.Get(payload.routeJsonUrl);
-            yield return req.SendWebRequest();
-            if (req.result != UnityWebRequest.Result.Success)
-            {
-                FinishJob(payload.jobId, false, $"route download failed: {req.error}");
-                yield break;
-            }
-            routeJson = req.downloadHandler.text;
+            FinishJob(payload.jobId, false, "route json missing");
+            yield break;
         }
 
         if (!string.IsNullOrEmpty(payload.textureUrl))
@@ -115,6 +111,16 @@ public class RenderJobRunner : MonoBehaviour
 
         jobStatuses[payload.jobId] = RenderJobStatus.Running(payload.jobId, "configuring");
         ApplyWallTexture(wallTexture);
+
+        int sourceWidth = payload.imageWidth > 0 ? payload.imageWidth : 1;
+        int sourceHeight = payload.imageHeight > 0 ? payload.imageHeight : 1;
+        var holdRoute = new HoldRouteFile
+        {
+            image_width = sourceWidth,
+            image_height = sourceHeight,
+            holds = holds
+        };
+        string routeJson = JsonUtility.ToJson(holdRoute);
         ApplyRoute(routeJson);
 
         jobStatuses[payload.jobId] = RenderJobStatus.Running(payload.jobId, "rendering");
@@ -161,8 +167,8 @@ public class RenderJobRunner : MonoBehaviour
             yield break;
         }
 
-        int width = Mathf.Max(64, payload.width);
-        int height = Mathf.Max(64, payload.height);
+        int width = 1920;
+        int height = 1080;
         int fps = Mathf.Max(1, payload.fps);
 
         bool routeFinished = false;
@@ -194,8 +200,7 @@ public class RenderJobRunner : MonoBehaviour
                 frameTexture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
                 frameTexture.Apply(false);
 
-                NativeArray<byte> raw = frameTexture.GetRawTextureData();
-                byte[] frameBytes = raw.ToArray();
+                byte[] frameBytes = frameTexture.GetRawTextureData();
                 ffmpegProcess.StandardInput.BaseStream.Write(frameBytes, 0, frameBytes.Length);
                 ffmpegProcess.StandardInput.BaseStream.Flush();
 

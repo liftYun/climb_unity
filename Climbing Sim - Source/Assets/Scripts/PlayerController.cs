@@ -62,7 +62,10 @@ public class PlayerController : MonoBehaviour
             {
                 velocity = cam.forward * rollSpeed;
             }
-            targetDirection = Quaternion.LookRotation(velocity);
+            if (velocity.sqrMagnitude > 0.0001f)
+            {
+                targetDirection = Quaternion.LookRotation(velocity);
+            }
             velocity.y = yStore;
         }//Begin Rolling
         if (!stationary && !rolling && !climbing)  //Regular Walking
@@ -100,7 +103,10 @@ public class PlayerController : MonoBehaviour
         float yStore = velocity.y;
         velocity = (cam.forward * Input.GetAxis("Vertical")) + (cam.right * Input.GetAxis("Horizontal"));
         velocity = velocity.normalized * speed;
-        targetDirection = Quaternion.LookRotation(velocity);
+        if (velocity.sqrMagnitude > 0.0001f)
+        {
+            targetDirection = Quaternion.LookRotation(velocity);
+        }
 
         velocity.y = yStore;
 
